@@ -16,8 +16,6 @@ Persistent Config: Stores baud rate, unit IDs, and network parameters in ESP32 F
 
 <img width="721" height="290" alt="image" src="https://github.com/user-attachments/assets/f3a6d287-693a-4c7d-8386-763ec0adf558" />
 
-Connect to RS-485 Bus
-
 🛠️ Getting Started
 
 Flash Firmware: Compile and flash the project onto your ESP32 using Arduino IDE or PlatformIO.
