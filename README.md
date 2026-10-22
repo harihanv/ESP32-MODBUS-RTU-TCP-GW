@@ -14,47 +14,7 @@ Captive Portal Setup: Easy initial network provisioning via auto-created Wi-Fi A
 
 Persistent Config: Stores baud rate, unit IDs, and network parameters in ESP32 Flash memory.
 
-🔌 Quick Wiring
-
-ESP32 Pin
-
-MAX485 / RS-485 Module
-
-Description
-
-5V / 3.3V
-
-VCC
-
-Power Supply
-
-GND
-
-GND
-
-Common Ground
-
-GPIO 16 (RX2)
-
-RO
-
-Serial Receive
-
-GPIO 17 (TX2)
-
-DI
-
-Serial Transmit
-
-GPIO 4 (Optional)
-
-DE / RE
-
-Direction Control (if required)
-
-—
-
-A (+) / B (-)
+<img width="721" height="290" alt="image" src="https://github.com/user-attachments/assets/f3a6d287-693a-4c7d-8386-763ec0adf558" />
 
 Connect to RS-485 Bus
 
