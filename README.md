@@ -5,7 +5,6 @@ This gateway acts as a protocol translator and polling manager. It polls downstr
 📸 Overview & Key Features
 Bi-directional Protocol Translation: Converts Modbus TCP requests to Modbus RTU frame formats and back.
 Multi-Client Handling: Allows multiple network TCP clients to request data simultaneously without causing serial bus contention or timeouts.
-Device Profiles & Presets: Native support for standard industrial and renewable energy devices (e.g., Eastron SDM meters, Growatt/SolarEdge inverters, generic Modbus slaves).
 Web-Based Management Portal: Interactive browser-based GUI for adjusting Wi-Fi, serial parameters, slave client profiles, and register polling configurations.
 Real-time Diagnostics & Monitoring: Live view of holding/input register states, communication success/error counters, and signal strength (RSSI).
 Captive Portal Provisioning: Automatic Access Point (AP) mode on first boot for easy network credential configuration.
