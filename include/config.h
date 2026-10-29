@@ -14,8 +14,8 @@
 // Hardware Configuration (Native ESP-IDF RS485 Half-Duplex)
 #define MODBUS_UART_NUM      UART_NUM_2
 #define MODBUS_TX_PIN        17
-#define MODBUS_RX_PIN        18
-#define MODBUS_RTS_PIN       21   // Connects to MAX485 DE & !RE
+#define MODBUS_RX_PIN        16
+#define MODBUS_RTS_PIN       UART_PIN_NO_CHANGE   // Connects to MAX485 DE & !RE
 #define MODBUS_CTS_PIN       UART_PIN_NO_CHANGE
 
 #define MODBUS_RX_BUF_SIZE   512
