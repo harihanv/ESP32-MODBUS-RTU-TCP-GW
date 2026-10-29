@@ -20,6 +20,192 @@ static unsigned long setupApStopAt = 0;
 static bool setupApStopScheduled = false;
 static constexpr unsigned long SETUP_AP_SUCCESS_GRACE_MS = 30000;
 static constexpr unsigned long WIFI_RETRY_MAX_DELAY_MS = 60000;
+static constexpr unsigned long SERIAL_CLI_AUTH_TIMEOUT_MS = 5UL * 60UL * 1000UL;
+static bool serialCliAuthenticated = false;
+static unsigned long serialCliLastAuthenticatedAt = 0;
+
+static bool readSerialArgument(const String& command, size_t& position,
+                               String& argument) {
+  while (position < command.length() &&
+         isspace(static_cast<unsigned char>(command[position]))) {
+    ++position;
+  }
+  if (position >= command.length()) return false;
+
+  const char quote = command[position] == '"' || command[position] == '\''
+    ? command[position++] : '\0';
+  argument = "";
+  while (position < command.length()) {
+    const char current = command[position++];
+    if (quote != '\0' && current == quote) {
+      return position == command.length() ||
+        isspace(static_cast<unsigned char>(command[position]));
+    }
+    if (quote == '\0' &&
+        isspace(static_cast<unsigned char>(current))) {
+      return true;
+    }
+    if (current == '\\' && quote != '\0' &&
+        position < command.length() &&
+        (command[position] == quote || command[position] == '\\')) {
+      argument += command[position++];
+    } else {
+      argument += current;
+    }
+  }
+  return quote == '\0';
+}
+
+static void executeSerialCommand(String command) {
+  const String rawCommand = command;
+  command.trim();
+  if (command.isEmpty()) return;
+
+  if (command.equalsIgnoreCase("help")) {
+    Serial.println("--- Serial Commands ---");
+    Serial.println("auth <admin-password>        - Unlock Wi-Fi commands for 5 minutes");
+    Serial.println("logout                        - Lock Wi-Fi commands");
+    Serial.println("status                        - Show Wi-Fi connection status");
+    Serial.println("wifi set <ssid> <password>    - Save Wi-Fi credentials and restart");
+    Serial.println("wifi clear                    - Clear saved Wi-Fi and restart");
+    Serial.println("factory default               - Restore factory defaults and restart");
+    Serial.println("Quote arguments containing spaces; use \\\" or \\\\ inside quotes.");
+    Serial.println("------------------------------");
+    return;
+  }
+
+  if (command.equalsIgnoreCase("status")) {
+    Serial.printf("Wi-Fi connected: %s\n",
+                  WiFi.status() == WL_CONNECTED ? "YES" : "NO");
+    Serial.printf("SSID: %s\n",
+                  WiFi.status() == WL_CONNECTED ? WiFi.SSID().c_str() : "not connected");
+    Serial.printf("IP address: %s\n",
+                  WiFi.status() == WL_CONNECTED
+                    ? WiFi.localIP().toString().c_str() : "0.0.0.0");
+    Serial.printf("Saved Wi-Fi configuration: %s\n",
+                  wifi_configured ? "YES" : "NO");
+    return;
+  }
+
+  size_t rawCommandStart = 0;
+  while (rawCommandStart < rawCommand.length() &&
+         isspace(static_cast<unsigned char>(rawCommand[rawCommandStart]))) {
+    ++rawCommandStart;
+  }
+  if (rawCommand.length() >= rawCommandStart + 5 &&
+      rawCommand.substring(rawCommandStart, rawCommandStart + 5)
+        .equalsIgnoreCase("auth ")) {
+    serialCliAuthenticated = false;
+    const String password = rawCommand.substring(rawCommandStart + 5);
+    if (!httpCredentialsConfigured()) {
+      Serial.println("ERROR: Set the admin password in the web interface first.");
+    } else if (!verifyHttpPassword(password)) {
+      Serial.println("ERROR: Invalid admin password.");
+    } else {
+      serialCliAuthenticated = true;
+      serialCliLastAuthenticatedAt = millis();
+      Serial.println("SUCCESS: Wi-Fi commands unlocked for 5 minutes.");
+    }
+    return;
+  }
+
+  if (command.equalsIgnoreCase("logout")) {
+    serialCliAuthenticated = false;
+    Serial.println("SUCCESS: Wi-Fi commands locked.");
+    return;
+  }
+
+  const bool wifiSetPrefix = command.length() >= 8 &&
+    command.substring(0, 8).equalsIgnoreCase("wifi set");
+  const bool wifiSet = wifiSetPrefix &&
+    (command.length() == 8 ||
+     isspace(static_cast<unsigned char>(command[8])));
+  const bool wifiClear = command.equalsIgnoreCase("wifi clear");
+  const bool factoryDefault = command.equalsIgnoreCase("factory default");
+  if (!wifiSet && !wifiClear && !factoryDefault) {
+    Serial.println("ERROR: Unknown command. Type 'help' for available commands.");
+    return;
+  }
+
+  if (!serialCliAuthenticated ||
+      millis() - serialCliLastAuthenticatedAt >= SERIAL_CLI_AUTH_TIMEOUT_MS) {
+    serialCliAuthenticated = false;
+    Serial.println("ERROR: Authenticate with 'auth <admin-password>' first.");
+    return;
+  }
+  serialCliLastAuthenticatedAt = millis();
+
+  if (factoryDefault) {
+    if (!factoryReset()) {
+      Serial.println("ERROR: Factory reset failed; see serial log.");
+      return;
+    }
+    Serial.println("SUCCESS: Factory defaults restored; restarting.");
+  } else if (wifiClear) {
+    clearWifiConfig();
+    Serial.println("SUCCESS: Saved Wi-Fi settings cleared; restarting.");
+  } else {
+    size_t position = 8;
+    String ssid;
+    String password;
+    if (!readSerialArgument(command, position, ssid) ||
+        !readSerialArgument(command, position, password)) {
+      Serial.println("ERROR: Use wifi set <ssid> <password>; quote values containing spaces.");
+      return;
+    }
+    while (position < command.length() &&
+           isspace(static_cast<unsigned char>(command[position]))) {
+      ++position;
+    }
+    if (position != command.length() || ssid.isEmpty() ||
+        ssid.length() > 32 || password.length() > 64) {
+      Serial.println("ERROR: SSID must be 1-32 characters and password at most 64 characters.");
+      return;
+    }
+    if (!saveWifiConfig(ssid, password, wifiUseDhcp, wifiStaticIp,
+                        wifiGateway, wifiSubnet, wifiDns)) {
+      Serial.println("ERROR: Failed to save Wi-Fi settings.");
+      return;
+    }
+    Serial.println("SUCCESS: Wi-Fi settings saved; restarting.");
+  }
+
+  Serial.flush();
+  delay(250);
+  ESP.restart();
+}
+
+static void checkSerialCommands() {
+  static String commandBuffer;
+  static bool discardingOverflow = false;
+  static bool previousCharacterWasCarriageReturn = false;
+  while (Serial.available()) {
+    const char character = static_cast<char>(Serial.read());
+    if (character == '\n' && previousCharacterWasCarriageReturn) {
+      previousCharacterWasCarriageReturn = false;
+      continue;
+    }
+    previousCharacterWasCarriageReturn = character == '\r';
+    if (character == '\r' || character == '\n') {
+      Serial.println();
+      if (discardingOverflow) {
+        Serial.println("ERROR: Serial CLI command exceeds 256 characters.");
+      } else if (!commandBuffer.isEmpty()) {
+        executeSerialCommand(commandBuffer);
+      }
+      Serial.print("> ");
+      commandBuffer = "";
+      discardingOverflow = false;
+    } else if (!discardingOverflow && character != '\r') {
+      if (commandBuffer.length() < 256) {
+        commandBuffer += character;
+      } else {
+        commandBuffer = "";
+        discardingOverflow = true;
+      }
+    }
+  }
+}
 
 static bool applyStationNetworkConfig() {
   if (!wifiUseDhcp) {
@@ -123,10 +309,10 @@ static void initializeGatewayServices() {
 
 static void startMdns(bool wifiConnected) {
   if (mdnsStarted) MDNS.end();
-  mdnsStarted = MDNS.begin(OTA_HOSTNAME);
+  mdnsStarted = MDNS.begin(gatewayHostname.c_str());
   if (mdnsStarted) {
     MDNS.addService("http", "tcp", WEB_PORT);
-    const String setupUrl = "http://" + String(OTA_HOSTNAME) + ".local";
+    const String setupUrl = "http://" + gatewayHostname + ".local";
     addLog(wifiConnected
              ? "MDNS: dashboard available at " + setupUrl
              : "MDNS: setup page available at " + setupUrl +
@@ -187,6 +373,12 @@ static void maintainWifiConnection() {
 
 void setup() {
   Serial.begin(115200);
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+  const unsigned long serialWaitStarted = millis();
+  while (!Serial && millis() - serialWaitStarted < 2000) {
+    delay(10);
+  }
+#endif
   startMs = millis();
   if (!initLogging()) {
     Serial.println("LOG: unable to create log-buffer mutex");
@@ -202,7 +394,7 @@ void setup() {
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(wifi_configured);
   WiFi.persistent(false);
-  WiFi.setHostname(OTA_HOSTNAME);
+  WiFi.setHostname(gatewayHostname.c_str());
 
   if (wifi_configured) {
     addLog("WIFI: starting station connection with setup AP available",
@@ -237,9 +429,12 @@ void setup() {
   initWebServer();
   initOTA();
   addLog("STATE: HTTP_SERVER_READY (port " + String(WEB_PORT) + ")", "success");
+  Serial.println("Serial console ready. Type 'help' for commands.");
+  Serial.print("> ");
 }
 
 void loop() {
+  checkSerialCommands();
   handleWebServerRestart();
   maintainWifiConnection();
   maintainModbusPathState();

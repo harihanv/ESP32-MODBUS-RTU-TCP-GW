@@ -5,6 +5,8 @@
 #include "RTUutils.h"
 #include "config.h"
 
+#define MODBUS_FC_READ_COILS               0x01
+#define MODBUS_FC_READ_DISCRETE_INPUTS     0x02
 #define MODBUS_FC_READ_HOLDING_REGISTERS   0x03
 #define MODBUS_FC_READ_INPUT_REGISTERS     0x04
 #define MODBUS_FC_WRITE_SINGLE_COIL        0x05
@@ -27,4 +29,7 @@ bool initModbusRTU();
 bool rtu_read_registers(uint8_t slave_id, uint8_t fc, uint16_t address,
                         uint16_t quantity, uint16_t* result,
                         ModbusRtuExchangeTrace* trace = nullptr);
+bool rtu_read_bits(uint8_t slave_id, uint8_t fc, uint16_t address,
+                   uint16_t quantity, bool* result,
+                   ModbusRtuExchangeTrace* trace = nullptr);
 bool rtu_write_single_register(uint8_t slave_id, uint16_t address, uint16_t value);

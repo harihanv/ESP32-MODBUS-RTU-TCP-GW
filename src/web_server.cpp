@@ -94,13 +94,22 @@ static void processDiagnosticRequest(void *parameter) {
   }
 
   uint16_t registerValues[125];
+  bool bitValues[2000];
   ModbusRtuExchangeTrace trace;
-  const bool success = rtu_read_registers(
-    context->unitId, context->functionCode, context->address,
-    context->quantity, registerValues, &trace);
+  const bool isBitRead = context->functionCode == MODBUS_FC_READ_COILS ||
+    context->functionCode == MODBUS_FC_READ_DISCRETE_INPUTS;
+  const bool success = isBitRead
+    ? rtu_read_bits(context->unitId, context->functionCode, context->address,
+                    context->quantity, bitValues, &trace)
+    : rtu_read_registers(context->unitId, context->functionCode,
+                         context->address, context->quantity,
+                         registerValues, &trace);
   endRtuDiagnostic();
 
-  DynamicJsonDocument result(4096);
+  const size_t jsonCapacity = isBitRead
+    ? JSON_OBJECT_SIZE(12) + JSON_ARRAY_SIZE(context->quantity) + 2048
+    : 4096;
+  DynamicJsonDocument result(jsonCapacity);
   result["success"] = success;
   result["unit_id"] = context->unitId;
   result["function_code"] = context->functionCode;
@@ -122,9 +131,18 @@ static void processDiagnosticRequest(void *parameter) {
     }
   }
   if (success) {
-    JsonArray values = result.createNestedArray("registers");
-    for (uint16_t i = 0; i < context->quantity; ++i) {
-      values.add(registerValues[i]);
+    if (isBitRead) {
+      const char *key = context->functionCode == MODBUS_FC_READ_COILS
+        ? "coil_status" : "input_status";
+      JsonArray values = result.createNestedArray(key);
+      for (uint16_t i = 0; i < context->quantity; ++i) {
+        values.add(bitValues[i]);
+      }
+    } else {
+      JsonArray values = result.createNestedArray("registers");
+      for (uint16_t i = 0; i < context->quantity; ++i) {
+        values.add(registerValues[i]);
+      }
     }
   } else if (trace.error_code == Modbus::TIMEOUT ||
              trace.error_code == Modbus::GATEWAY_TARGET_NO_RESP) {
@@ -709,6 +727,9 @@ void initWebServer() {
     doc["tcp_port"] = modbusTcpPort;
     doc["rtu_timeout_ms"] = modbusRtuTimeoutMs;
     doc["tcp_timeout_ms"] = modbusTcpTimeoutMs;
+    doc["hostname"] = gatewayHostname;
+    doc["ip_address"] = WiFi.status() == WL_CONNECTED
+      ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
     doc["ssid"] = wifi_ssid;
     doc["wifi_dhcp"] = wifiUseDhcp;
     doc["wifi_static_ip"] = wifiStaticIp;
@@ -747,6 +768,14 @@ void initWebServer() {
       return;
     }
 
+    const String hostname = doc["hostname"].is<const char*>()
+      ? doc["hostname"].as<String>() : gatewayHostname;
+    if (!validMdnsHostname(hostname)) {
+      req->send(400, "application/json",
+        "{\"error\":\"Hostname must be 1-63 letters, numbers, or hyphens, and cannot start or end with a hyphen\"}");
+      return;
+    }
+
     UARTConfig candidate;
     candidate.baud = doc["baud"].as<uint32_t>();
     candidate.data_bits = doc["data_bits"].as<uint8_t>();
@@ -765,7 +794,8 @@ void initWebServer() {
       return;
     }
 
-    if (!saveGatewaySettings(candidate, tcpPort, rtuTimeoutMs, tcpTimeoutMs)) {
+    if (!saveGatewaySettings(candidate, tcpPort, rtuTimeoutMs, tcpTimeoutMs,
+                             hostname)) {
       req->send(500, "application/json", "{\"error\":\"Failed to save settings to non-volatile storage\"}");
       return;
     }
@@ -877,13 +907,18 @@ void initWebServer() {
     const uint8_t functionCode = doc["function_code"].as<uint8_t>();
     const uint16_t address = doc["address"].as<uint16_t>();
     const uint16_t quantity = doc["quantity"].as<uint16_t>();
+    const bool isBitRead = functionCode == MODBUS_FC_READ_COILS ||
+      functionCode == MODBUS_FC_READ_DISCRETE_INPUTS;
+    const uint16_t maxQuantity = isBitRead ? 2000 : 125;
     if (unitId < 1 || unitId > 247 ||
-        (functionCode != MODBUS_FC_READ_HOLDING_REGISTERS &&
+        (functionCode != MODBUS_FC_READ_COILS &&
+         functionCode != MODBUS_FC_READ_DISCRETE_INPUTS &&
+         functionCode != MODBUS_FC_READ_HOLDING_REGISTERS &&
          functionCode != MODBUS_FC_READ_INPUT_REGISTERS) ||
-        quantity < 1 || quantity > 125 ||
+        quantity < 1 || quantity > maxQuantity ||
         static_cast<uint32_t>(address) + quantity > 65536UL) {
       req->send(400, "application/json",
-        "{\"error\":\"Use unit ID 1-247, function 03 or 04, valid address and quantity 1-125\"}");
+        "{\"error\":\"Use unit ID 1-247, function 01-04, valid address and quantity (1-2000 for bits, 1-125 for registers)\"}");
       return;
     }
 

@@ -2,7 +2,7 @@
 #include <cstring>
 
 const char* AP_SSID      = "AP-modbus-gw";
-const char* OTA_HOSTNAME = "esp32-modbus-gw";
+String gatewayHostname = DEFAULT_GATEWAY_HOSTNAME;
 String ap_password = "initpass";
 
 UARTConfig uartCfg;
@@ -36,6 +36,22 @@ static std::deque<String> logBuffer;
 static SemaphoreHandle_t logMutex = nullptr;
 static std::atomic<LogLevel> serialLogLevel{LogLevel::INFO};
 static std::atomic<LogLevel> webLogLevel{LogLevel::INFO};
+
+bool validMdnsHostname(const String& hostname) {
+  if (hostname.isEmpty() || hostname.length() > 63 ||
+      hostname[0] == '-' || hostname[hostname.length() - 1] == '-') {
+    return false;
+  }
+  for (size_t i = 0; i < hostname.length(); ++i) {
+    const char character = hostname[i];
+    if (!((character >= 'a' && character <= 'z') ||
+          (character >= 'A' && character <= 'Z') ||
+          (character >= '0' && character <= '9') || character == '-')) {
+      return false;
+    }
+  }
+  return true;
+}
 
 static LogLevel parseLogLevel(const char* level) {
   if (strcmp(level, "error") == 0) return LogLevel::ERROR;
@@ -180,6 +196,13 @@ String bytesToHex(const uint8_t* data, size_t len) {
 
 void loadConfig() {
   preferences.begin("modbus-gw", false);
+  gatewayHostname = preferences.getString(
+    "hostname", DEFAULT_GATEWAY_HOSTNAME);
+  if (!validMdnsHostname(gatewayHostname)) {
+    addLog("SETTINGS: saved hostname is invalid; using default hostname",
+           "warning");
+    gatewayHostname = DEFAULT_GATEWAY_HOSTNAME;
+  }
   uartCfg.baud = preferences.getUInt("baud", MODBUS_DEFAULT_BAUD);
   uartCfg.stop_bits = preferences.getUChar("stop_bits", MODBUS_DEFAULT_STOPBITS);
   uartCfg.data_bits = preferences.getUChar("data_bits", MODBUS_DEFAULT_DATABITS);
@@ -247,9 +270,15 @@ void saveUartConfig() {
 }
 
 bool saveGatewaySettings(const UARTConfig& uart, uint16_t tcpPort,
-                         uint32_t rtuTimeoutMs, uint32_t tcpTimeoutMs) {
+                         uint32_t rtuTimeoutMs, uint32_t tcpTimeoutMs,
+                         const String& hostname) {
   if (rtuTimeoutMs == 0 || tcpTimeoutMs == 0) {
     addLog("SETTINGS: RTU and TCP timeouts must be greater than zero", "error");
+    return false;
+  }
+  if (!validMdnsHostname(hostname)) {
+    addLog("SETTINGS: hostname must be a valid 1-63 character DNS label",
+           "error");
     return false;
   }
 
@@ -265,8 +294,10 @@ bool saveGatewaySettings(const UARTConfig& uart, uint16_t tcpPort,
   preferences.putUShort("tcp_port", tcpPort);
   preferences.putUInt("rtu_timeout_ms", rtuTimeoutMs);
   preferences.putUInt("tcp_timeout_ms", tcpTimeoutMs);
+  const size_t hostnameBytes = preferences.putString("hostname", hostname);
 
-  const bool verified =
+  const bool verified = hostnameBytes == hostname.length() &&
+    preferences.getString("hostname", "") == hostname &&
     preferences.getUInt("baud", 0) == uart.baud &&
     preferences.getUChar("stop_bits", 0) == uart.stop_bits &&
     preferences.getUChar("data_bits", 0) == uart.data_bits &&
@@ -285,7 +316,9 @@ bool saveGatewaySettings(const UARTConfig& uart, uint16_t tcpPort,
   modbusTcpPort = tcpPort;
   modbusRtuTimeoutMs = rtuTimeoutMs;
   modbusTcpTimeoutMs = tcpTimeoutMs;
-  addLog("SETTINGS: serial, TCP port, and timeout settings saved", "success");
+  gatewayHostname = hostname;
+  addLog("SETTINGS: gateway hostname, serial, TCP port, and timeout settings saved",
+         "success");
   return true;
 }
 
@@ -428,6 +461,7 @@ bool factoryReset() {
   wifiGateway = "";
   wifiSubnet = "";
   wifiDns = "";
+  gatewayHostname = DEFAULT_GATEWAY_HOSTNAME;
   http_user = "";
   authPassword = "";
   authConfigured = false;

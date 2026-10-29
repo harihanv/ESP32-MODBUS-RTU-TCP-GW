@@ -346,11 +346,11 @@ button.danger{background:#b91c1c}.muted{color:#64748b;font-size:14px}.logs{backg
 <div><label for="tcp-timeout-ms">Modbus TCP timeout (ms)</label><input id="tcp-timeout-ms" type="number" min="100" max="60000" step="10" value="1000" required></div>
 </div><button class="action" type="submit">Save Modbus TCP Settings</button></form></div></section>
 <section class="panel" id="diagnostic"><div class="card"><h2>Modbus RTU Diagnostics</h2>
-<p class="muted">Read holding or input registers from an RTU unit. The gateway builds the Modbus request and adds the RTU CRC automatically.</p>
+<p class="muted">Read coil status, discrete input status, holding registers, or input registers from an RTU unit. The gateway builds the Modbus request and adds the RTU CRC automatically.</p>
 <form id="rtu-diagnostic-form"><label for="diag-unit">Unit ID (1-247)</label><input id="diag-unit" type="number" min="1" max="247" value="1" required>
-<label for="diag-register-type">Register type</label><select id="diag-register-type"><option value="3">Holding Registers (03)</option><option value="4">Input Registers (04)</option></select>
+<label for="diag-register-type">Data type</label><select id="diag-register-type"><option value="1">Coils (01)</option><option value="2">Discrete Inputs (02)</option><option value="3" selected>Holding Registers (03)</option><option value="4">Input Registers (04)</option></select>
 <label for="diag-address">Starting address (0-65535)</label><input id="diag-address" type="number" min="0" max="65535" value="1" required>
-<label for="diag-count">Number of registers (1-125)</label><input id="diag-count" type="number" min="1" max="125" value="4" required>
+<label id="diag-count-label" for="diag-count">Number of registers (1-125)</label><input id="diag-count" type="number" min="1" max="125" value="4" required>
 <button id="diag-send" class="action" type="submit">Send RTU Command</button></form>
 <h3>Raw exchange</h3><pre class="logs" id="diag-result">No diagnostic command sent. Full RTU frames, including CRC bytes, will appear here.</pre></div></section>
 <section class="panel" id="ota"><div class="card"><h2>Firmware Update</h2>
@@ -366,6 +366,11 @@ button.danger{background:#b91c1c}.muted{color:#64748b;font-size:14px}.logs{backg
 <form id="auth-form"><label>Username</label><input value="admin" readonly>
 <label for="auth-password">New password (1-64 characters)</label><input id="auth-password" type="password" minlength="1" maxlength="64" autocomplete="new-password" required>
 <button class="action" type="submit">Update Login Credentials</button></form></div>
+<div class="card"><h2>Network Hostname</h2><p class="muted">Set the device hostname used for DHCP and mDNS. Open the dashboard at hostname.local after the gateway reboots. Use 1-63 letters, numbers, or hyphens; the first and last characters must be letters or numbers.</p>
+<form id="hostname-form"><label for="hostname">Hostname</label><input id="hostname" type="text" minlength="1" maxlength="63" pattern="[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?" required>
+<p class="muted">Suggested for this device's current IP: <strong id="hostname-suggestion">Unavailable</strong></p>
+<button id="use-hostname-suggestion" class="action" type="button">Use Suggested Hostname</button>
+<button class="action" type="submit">Save Hostname</button></form></div>
 <div class="card"><h2>Logging</h2><p class="muted">Configure serial-console and System Logs verbosity independently. Debug includes Modbus frame details. These settings are saved across reboots.</p>
 <form id="logging-form"><label for="serial-log-level">Serial console</label><select id="serial-log-level">
 <option value="0">Errors only</option><option value="1">Warnings and errors</option>
@@ -374,12 +379,13 @@ button.danger{background:#b91c1c}.muted{color:#64748b;font-size:14px}.logs{backg
 <option value="0">Errors only</option><option value="1">Warnings and errors</option>
 <option value="2">Info, warnings, and errors</option><option value="3">Debug (all messages)</option></select>
 <button class="action" type="submit">Save Logging Settings</button></form></div>
-<div class="card"><h2>System actions</h2><p>Factory reset clears Wi-Fi and login credentials and restores serial and TCP defaults. You will create a new login account after reset.</p>
+<div class="card"><h2>System actions</h2><p>Factory reset clears Wi-Fi and login credentials and restores the default hostname and serial/TCP settings. You will create a new login account after reset.</p>
 <button class="action danger" onclick="factoryReset()">Factory Reset</button><button class="action" onclick="rebootDevice()">Reboot</button></div></section>
 </main></div>
 <script>
 const titles={overview:'Dashboard',network:'Network Settings',serial:'Serial / RTU Settings','modbus-tcp':'Modbus TCP Settings',diagnostic:'RTU Diagnostics',ota:'OTA Update',logs:'System Logs',system:'System Settings'};
 const baudSelect=document.getElementById('baud'),paritySelect=document.getElementById('parity');
+const diagnosticTypeSelect=document.getElementById('diag-register-type');
 let toastTimer,activePanel='overview',panelChangeInProgress=false;
 let networkScanBusy=false;
 function showToast(message,type=''){
@@ -434,6 +440,19 @@ document.getElementById('network-scan-results').onchange=event=>{
 if(event.target.value)document.getElementById('ssid').value=event.target.value;
 };
 document.getElementById('network-scan-button').onclick=scanDashboardNetworks;
+function diagnosticTypeName(functionCode){
+return({1:'Coil status',2:'Input status',3:'Holding registers',4:'Input registers'})[functionCode]||'Unknown';
+}
+function updateDiagnosticQuantity(){
+const functionCode=Number(diagnosticTypeSelect.value),isBits=functionCode===1||functionCode===2;
+const count=document.getElementById('diag-count');
+count.max=isBits?'2000':'125';
+document.getElementById('diag-count-label').textContent=isBits?
+`Number of ${functionCode===1?'coils':'discrete inputs'} (1-2000)`:'Number of registers (1-125)';
+if(Number(count.value)>Number(count.max))count.value=count.max;
+}
+diagnosticTypeSelect.addEventListener('change',updateDiagnosticQuantity);
+updateDiagnosticQuantity();
 document.querySelectorAll('.nav button').forEach(button=>button.onclick=async()=>{
 if(panelChangeInProgress||button.dataset.panel===activePanel)return;
 panelChangeInProgress=true;
@@ -483,6 +502,15 @@ paritySelect.value=d.parity;document.getElementById('stop-bits').value=String(d.
 document.getElementById('tcp-port').value=d.tcp_port;
 document.getElementById('rtu-timeout-ms').value=d.rtu_timeout_ms ?? 500;
 document.getElementById('tcp-timeout-ms').value=d.tcp_timeout_ms ?? 1000;
+document.getElementById('hostname').value=d.hostname||'esp32-modbus-gw';
+const ipOctets=String(d.ip_address||'').split('.').map(Number);
+const hostnameSuggestion=ipOctets.length===4&&ipOctets.every(octet=>Number.isInteger(octet)&&octet>=0&&octet<=255)
+?`esp32-gw-${ipOctets[2]}-${ipOctets[3]}`:'';
+document.getElementById('hostname-suggestion').textContent=hostnameSuggestion||'Unavailable';
+document.getElementById('use-hostname-suggestion').disabled=!hostnameSuggestion;
+document.getElementById('use-hostname-suggestion').onclick=()=>{
+if(hostnameSuggestion)document.getElementById('hostname').value=hostnameSuggestion;
+};
 document.getElementById('ssid').value=d.ssid||'';
 document.getElementById('network-mode').value=d.wifi_dhcp===false?'static':'dhcp';
 document.getElementById('network-ip').value=d.wifi_static_ip||'';
@@ -524,6 +552,12 @@ document.getElementById('tcp-form').onsubmit=async e=>{
 e.preventDefault();showToast('Saving Modbus TCP settings...');
 try{await postJson('/api/settings',gatewaySettingsPayload());
 showToast('Settings saved. Rebooting to apply changes.','success');}catch(err){showToast(err.message,'error');}
+};
+document.getElementById('hostname-form').onsubmit=async e=>{
+e.preventDefault();showToast('Saving hostname...');
+try{const payload=gatewaySettingsPayload();payload.hostname=document.getElementById('hostname').value.trim();
+await postJson('/api/settings',payload);
+showToast('Hostname saved. The gateway is rebooting; open '+payload.hostname+'.local after it reconnects.','success');}catch(err){showToast(err.message,'error');}
 };
 document.getElementById('auth-form').onsubmit=async e=>{
 e.preventDefault();showToast('Updating login credentials...');
@@ -596,17 +630,22 @@ const unitId=Number(document.getElementById('diag-unit').value);
 const functionCode=Number(document.getElementById('diag-register-type').value);
 const address=Number(document.getElementById('diag-address').value);
 const quantity=Number(document.getElementById('diag-count').value);
+const maxQuantity=functionCode===1||functionCode===2?2000:125;
+if(quantity<1||quantity>maxQuantity){
+showToast(`Quantity must be between 1 and ${maxQuantity} for this data type.`,'error');
+return;
+}
 if(address+quantity>65536){
-showToast('Starting address plus register count must not exceed 65536.','error');
+showToast('Starting address plus quantity must not exceed 65536.','error');
 return;
 }
 button.disabled=true;
 resultElement.textContent=[
 'Status: Waiting for RTU response...',
 `Unit ID: ${unitId}`,
-`Register type: ${functionCode===3?'Holding':'Input'}`,
+`Data type: ${diagnosticTypeName(functionCode)}`,
 `Starting address: ${address}`,
-`Register count: ${quantity}`,
+`Quantity: ${quantity}`,
 'RTU request is being built and transmitted by the gateway...',
 'RTU RX: waiting...'
 ].join('\n');
@@ -635,13 +674,15 @@ if(Date.now()>=deadline)throw new Error('Gateway did not return the RTU diagnost
 resultElement.textContent=[
 `Status: ${result.success?'Valid response':'No valid response'}`,
 `Unit ID: ${result.unit_id||unitId}`,
-`Register type: ${functionCode===3?'Holding':'Input'}`,
+`Data type: ${diagnosticTypeName(functionCode)}`,
 `Starting address: ${address}`,
-`Register count: ${quantity}`,
+`Quantity: ${quantity}`,
 `Request PDU: ${result.request_pdu||'not transmitted'}`,
 `RTU TX (unit ID + PDU + CRC): ${result.request_rtu_frame||'not transmitted'}`,
 `RTU RX (raw frame): ${result.response_rtu_frame||'no bytes received'}`,
 result.registers?`Register values: ${result.registers.join(', ')}`:'',
+result.coil_status?`Coil status: ${result.coil_status.map((status,index)=>`${address+index}: ${status?'ON':'OFF'}`).join(', ')}`:'',
+result.input_status?`Input status: ${result.input_status.map((status,index)=>`${address+index}: ${status?'ON':'OFF'}`).join(', ')}`:'',
 result.response_pdu?`Response PDU: ${result.response_pdu}`:'',
 result.error?`Error: ${result.error}`:''
 ].filter(Boolean).join('\n');
@@ -653,9 +694,9 @@ showToast('Session expired. Sign in again to continue.','error');
 resultElement.textContent=[
 'Status: No diagnostic response received',
 `Unit ID: ${unitId}`,
-`Register type: ${functionCode===3?'Holding':'Input'}`,
+`Data type: ${diagnosticTypeName(functionCode)}`,
 `Starting address: ${address}`,
-`Register count: ${quantity}`,
+`Quantity: ${quantity}`,
 'Request/RTU TX details: gateway did not return a diagnostic result.',
 'RTU RX: no response received',
 `HTTP connection error: ${error.message||'Unable to reach the gateway.'}`,

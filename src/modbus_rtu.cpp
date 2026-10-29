@@ -141,6 +141,96 @@ bool rtu_read_registers(uint8_t slave_id, uint8_t fc, uint16_t address,
   return true;
 }
 
+bool rtu_read_bits(uint8_t slave_id, uint8_t fc, uint16_t address,
+                   uint16_t quantity, bool* result,
+                   ModbusRtuExchangeTrace* trace) {
+  if (trace) {
+    trace->request_frame_len = 0;
+    trace->response_frame_len = 0;
+    trace->error_code = static_cast<uint8_t>(Modbus::SUCCESS);
+  }
+  if (!rtuReady || !result ||
+      (fc != MODBUS_FC_READ_COILS &&
+       fc != MODBUS_FC_READ_DISCRETE_INPUTS) ||
+      quantity == 0 || quantity > 2000 ||
+      static_cast<uint32_t>(address) + quantity > 65536UL) {
+    addLog("RTU read rejected: invalid state or bit-read parameters", "warning");
+    return false;
+  }
+
+  ModbusMessage request(slave_id, fc, address, quantity);
+  if (!request) {
+    addLog("RTU read rejected: eModbus could not build the request", "warning");
+    return false;
+  }
+
+  ModbusMessage requestFrame = request;
+  RTUutils::addCRC(requestFrame);
+  ++rtuTxCount;
+  addLog("RTU TX: " + bytesToHex(requestFrame.data(),
+                                 requestFrame.size()), "debug");
+  if (trace && requestFrame.size() <= sizeof(trace->request_frame)) {
+    trace->request_frame_len = requestFrame.size();
+    memcpy(trace->request_frame, requestFrame.data(), trace->request_frame_len);
+  }
+
+  const uint32_t token = requestToken.fetch_add(1);
+  ModbusMessage response = rtuClient.syncRequest(request, token);
+  if (response.size() > 0) ++rtuRxCount;
+  const Modbus::Error error = response.getError();
+  const uint8_t errorCode = static_cast<uint8_t>(error);
+  if (trace) trace->error_code = errorCode;
+
+  if (error != Modbus::SUCCESS) {
+    if (errorCode >= 1 && errorCode <= 0x0B) {
+      ModbusMessage responseFrame = response;
+      RTUutils::addCRC(responseFrame);
+      addLog("RTU RX exception: " + bytesToHex(responseFrame.data(),
+                                               responseFrame.size()), "warning");
+      if (trace && responseFrame.size() <= sizeof(trace->response_frame)) {
+        trace->response_frame_len = responseFrame.size();
+        memcpy(trace->response_frame, responseFrame.data(),
+               trace->response_frame_len);
+      }
+      errCount++;
+    } else {
+      logRtuError(error, slave_id, fc);
+    }
+    if (error == Modbus::REQUEST_QUEUE_FULL ||
+        error == Modbus::EMPTY_MESSAGE) {
+      if (trace) trace->request_frame_len = 0;
+    }
+    return false;
+  }
+
+  ModbusMessage responseFrame = response;
+  RTUutils::addCRC(responseFrame);
+  addLog("RTU RX: " + bytesToHex(responseFrame.data(),
+                                 responseFrame.size()), "debug");
+  if (trace && responseFrame.size() <= sizeof(trace->response_frame)) {
+    trace->response_frame_len = responseFrame.size();
+    memcpy(trace->response_frame, responseFrame.data(),
+           trace->response_frame_len);
+  }
+
+  const uint16_t expectedByteCount = (quantity + 7) / 8;
+  if (response.size() != 3 + expectedByteCount ||
+      response[0] != slave_id || response[1] != fc ||
+      response[2] != expectedByteCount) {
+    addLog("RTU RX error: bit response has invalid unit, function, or byte count",
+           "warning");
+    errCount++;
+    return false;
+  }
+
+  for (uint16_t index = 0; index < quantity; ++index) {
+    result[index] =
+      (response[3 + index / 8] & (1U << (index % 8))) != 0;
+  }
+  reqCount++;
+  return true;
+}
+
 bool rtu_write_single_register(uint8_t slave_id, uint16_t address,
                                uint16_t value) {
   if (!rtuReady) return false;

@@ -9,12 +9,13 @@
 #include "driver/uart.h"
 
 #define FIRMWARE_VERSION "2.1.0"
+#define DEFAULT_GATEWAY_HOSTNAME "esp32-modbus-gw"
 
 // Hardware Configuration (Native ESP-IDF RS485 Half-Duplex)
 #define MODBUS_UART_NUM      UART_NUM_2
 #define MODBUS_TX_PIN        17
-#define MODBUS_RX_PIN        16
-#define MODBUS_RTS_PIN       UART_PIN_NO_CHANGE   // Connects to MAX485 DE & !RE
+#define MODBUS_RX_PIN        18
+#define MODBUS_RTS_PIN       21   // Connects to MAX485 DE & !RE
 #define MODBUS_CTS_PIN       UART_PIN_NO_CHANGE
 
 #define MODBUS_RX_BUF_SIZE   512
@@ -41,7 +42,7 @@ enum class LogLevel : uint8_t {
 
 extern const char* AP_SSID;
 extern String ap_password;
-extern const char* OTA_HOSTNAME;
+extern String gatewayHostname;
 
 struct UARTConfig {
   uint32_t baud;
@@ -83,7 +84,9 @@ bool copyLogs(std::deque<String>& logs);
 bool clearLogs();
 void saveUartConfig();
 bool saveGatewaySettings(const UARTConfig& uart, uint16_t tcpPort,
-                         uint32_t rtuTimeoutMs, uint32_t tcpTimeoutMs);
+                         uint32_t rtuTimeoutMs, uint32_t tcpTimeoutMs,
+                         const String& hostname);
+bool validMdnsHostname(const String& hostname);
 bool saveWifiConfig(const String& ssid, const String& password, bool useDhcp,
                     const String& ip, const String& gateway,
                     const String& subnet, const String& dns);
